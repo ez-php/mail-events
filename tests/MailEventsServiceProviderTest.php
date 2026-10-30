@@ -16,9 +16,15 @@ use EzPhp\MailEvents\Mailgun\MailgunEventParser;
 use EzPhp\MailEvents\Mailgun\MailgunSignature;
 use EzPhp\MailEvents\Mailgun\MailgunWebhookController;
 use EzPhp\MailEvents\Payload;
+use EzPhp\MailEvents\Postmark\PostmarkAuthenticator;
+use EzPhp\MailEvents\Postmark\PostmarkEventParser;
+use EzPhp\MailEvents\Postmark\PostmarkWebhookController;
 use EzPhp\MailEvents\SendGrid\SendGridEventParser;
 use EzPhp\MailEvents\SendGrid\SendGridSignature;
 use EzPhp\MailEvents\SendGrid\SendGridWebhookController;
+use EzPhp\MailEvents\Ses\SesEventParser;
+use EzPhp\MailEvents\Ses\SesWebhookController;
+use EzPhp\MailEvents\Ses\SnsMessageVerifier;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\UsesClass;
 use Tests\MailEvents\ApplicationTestCase;
@@ -40,6 +46,12 @@ use Tests\SendGrid\SendGridKeyPair;
 #[UsesClass(SendGridWebhookController::class)]
 #[UsesClass(MailEvent::class)]
 #[UsesClass(Payload::class)]
+#[UsesClass(PostmarkAuthenticator::class)]
+#[UsesClass(PostmarkEventParser::class)]
+#[UsesClass(PostmarkWebhookController::class)]
+#[UsesClass(SnsMessageVerifier::class)]
+#[UsesClass(SesEventParser::class)]
+#[UsesClass(SesWebhookController::class)]
 final class MailEventsServiceProviderTest extends ApplicationTestCase
 {
     private const string MAILGUN_KEY = 'mg-signing-key';
@@ -55,6 +67,8 @@ final class MailEventsServiceProviderTest extends ApplicationTestCase
             'tolerance' => 120,
             'mailgun' => ['signing_key' => self::MAILGUN_KEY, 'path' => '/hooks/mailgun'],
             'sendgrid' => ['public_key' => self::keys()->publicBase64(), 'path' => '/hooks/sendgrid'],
+            'postmark' => ['username' => 'hook', 'password' => 's3cret', 'path' => '/hooks/postmark'],
+            'ses' => ['topic_arn' => 'arn:aws:sns:eu-central-1:123456789012:ses-events', 'path' => '/hooks/ses'],
         ];
     }
 
@@ -78,6 +92,8 @@ final class MailEventsServiceProviderTest extends ApplicationTestCase
 
         self::assertContains(['POST', '/hooks/mailgun', MailgunWebhookController::class, true], $routes);
         self::assertContains(['POST', '/hooks/sendgrid', SendGridWebhookController::class, true], $routes);
+        self::assertContains(['POST', '/hooks/postmark', PostmarkWebhookController::class, true], $routes);
+        self::assertContains(['POST', '/hooks/ses', SesWebhookController::class, true], $routes);
     }
 
     public function test_a_signed_mailgun_webhook_reaches_listeners_through_the_app(): void
@@ -97,6 +113,30 @@ final class MailEventsServiceProviderTest extends ApplicationTestCase
 
         self::assertSame(200, $response->status());
         self::assertSame(['a@example.com'], $seen);
+    }
+
+    public function test_an_authenticated_postmark_webhook_reaches_listeners_through_the_app(): void
+    {
+        $seen = [];
+        $this->app()->make(EventDispatcher::class)->listen(MailEvent::class, function (EventInterface $event) use (&$seen): void {
+            self::assertInstanceOf(MailEvent::class, $event);
+            $seen[] = $event->recipient;
+        });
+        $body = '{"RecordType":"Open","Recipient":"c@example.com","ReceivedAt":"2026-10-30T10:00:00Z"}';
+
+        $response = $this->app()->handle(new Request('POST', '/hooks/postmark', headers: [
+            'Authorization' => 'Basic ' . base64_encode('hook:s3cret'),
+        ], rawBody: $body));
+
+        self::assertSame(200, $response->status());
+        self::assertSame(['c@example.com'], $seen);
+    }
+
+    public function test_an_unsigned_ses_message_is_rejected_through_the_app(): void
+    {
+        $body = (string) json_encode(['Type' => 'Notification', 'TopicArn' => 'arn:aws:sns:eu-central-1:123456789012:ses-events', 'Message' => '{}']);
+
+        self::assertSame(403, $this->app()->handle(new Request('POST', '/hooks/ses', rawBody: $body))->status());
     }
 
     public function test_a_signed_sendgrid_webhook_reaches_listeners_through_the_app(): void

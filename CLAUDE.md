@@ -151,7 +151,7 @@ php make_module.php <name> --description="..." --services=mysql,redis --extensio
 
 `<name>` is the kebab-case package name; the namespace is derived as
 `EzPhp\<PascalCase>` (each `-`-separated word upper-cased) unless `--namespace=`
-overrides it. Existing exceptions the guess gets wrong: `asyncapi` → `AsyncApi`,
+overrides it. Existing exceptions the guess gets wrong: `asyncapi` → `AsyncApi`, `asyncapi-ui` → `AsyncApiUi`,
 `bignum` → `BigNum`, `dataloader` → `DataLoader`, `dotenv` → `Env`, `graphql` → `GraphQL`, `graphql-subscriptions` → `GraphQLSubscriptions`, `oauth` → `OAuth`,
 `opcache` → `OPCache`, `openapi` → `OpenApi`, `qrcode` → `QrCode`, `swagger-ui` → `SwaggerUI`, `webauthn` → `WebAuthn` and
 `websocket` → `WebSocket`; `websocket-client` → `WebsocketClient`, `websocket-tls` → `WebsocketTls`,
@@ -265,8 +265,9 @@ When adding a new module, add `"$ROOT/modules/<name>"` to the `PACKAGES` array i
 
 # Package: ez-php/mail-events
 
-The inbound counterpart to `ez-php/mail`'s Mailgun and SendGrid drivers. It receives their
-delivery webhooks, verifies the signature and timestamp, and normalises each event into a
+The inbound counterpart to `ez-php/mail`'s drivers. It receives Mailgun, SendGrid, Postmark and
+Amazon SES (via SNS) delivery webhooks, verifies them (signature and timestamp, Basic auth, or the
+SNS certificate), and normalises each event into a
 provider-neutral `MailEvent` (delivered, bounced, deferred, dropped, complained, opened,
 clicked, unsubscribed), which it dispatches through `ez-php/events`.
 
@@ -285,6 +286,14 @@ src/
 │   ├── MailgunSignature.php              — HMAC-SHA256(timestamp . token) check + tolerance window
 │   ├── MailgunEventParser.php            — `event-data` → MailEvent (failed split by severity)
 │   └── MailgunWebhookController.php      — verify → parse → dispatch; 401 / 406 / 200
+├── Postmark/
+│   ├── PostmarkAuthenticator.php         — Basic-auth check against the configured user/password (Postmark signs nothing)
+│   ├── PostmarkEventParser.php           — RecordType → MailEvent (soft bounces Deferred; SubscriptionChange → Unsubscribed when suppressing)
+│   └── PostmarkWebhookController.php     — verify → parse → dispatch; 401 / 400 / 200
+├── Ses/
+│   ├── SnsMessageVerifier.php            — SNS signature (v1 SHA1 / v2 SHA256) over the canonical string, cert URL pinned to sns.*.amazonaws.com, topic pinned; confirm() visits SubscribeURL
+│   ├── SesEventParser.php                — SES event (eventType / notificationType) → one MailEvent per recipient
+│   └── SesWebhookController.php          — verify → confirm subscription / parse Message → dispatch; 403 / 400 / 200
 └── SendGrid/
     ├── SendGridSignature.php             — ECDSA P-256 check over timestamp . raw body + tolerance window (ext-openssl)
     ├── SendGridEventParser.php           — one batch entry → MailEvent
@@ -301,7 +310,10 @@ tests/
 ├── SendGrid/SendGridKeyPair.php                  — test helper: fresh P-256 key pair, signs like SendGrid
 ├── SendGrid/SendGridSignatureTest.php            — base64 and PEM keys, tampering, foreign key, tolerance, malformed input, invalid key
 ├── SendGrid/SendGridEventParserTest.php          — field mapping, type mapping, incomplete entries
-└── SendGrid/SendGridWebhookControllerTest.php    — batch dispatch with skipped entries, 401, 400
+├── SendGrid/SendGridWebhookControllerTest.php    — batch dispatch with skipped entries, 401, 400
+├── Postmark/PostmarkWebhookTest.php              — credentials, RecordType mapping, ids/reason/link, controller 401/400/200
+├── Ses/SesSnsSigner.php                          — test helper: fresh RSA key + self-signed cert, signs SNS messages (v1/v2)
+└── Ses/SesWebhookTest.php                        — verification (versions, tampering, topic, cert host/scheme), per-recipient mapping, subscription confirmation, AWS-only SubscribeURL
 ```
 
 ---
@@ -312,8 +324,8 @@ tests/
 |---|---|
 | `MailEvent` | The one event class listeners subscribe to (`EventInterface`); branch on `$type`. |
 | `MailEventType` | Provider-neutral vocabulary. Anything without a mapping becomes `Other`; the original name stays in `$providerEvent`. |
-| `MailgunSignature` / `SendGridSignature` | Authenticity and freshness of a webhook request. |
-| `MailgunEventParser` / `SendGridEventParser` | Provider JSON → `MailEvent`. |
+| `MailgunSignature` / `SendGridSignature` / `PostmarkAuthenticator` / `SnsMessageVerifier` | Authenticity (and, for Mailgun/SendGrid, freshness) of a webhook request. |
+| `MailgunEventParser` / `SendGridEventParser` / `PostmarkEventParser` / `SesEventParser` | Provider JSON → `MailEvent` (SES: one per recipient). |
 | `MailgunWebhookController` / `SendGridWebhookController` | HTTP glue: verify, parse, dispatch, answer with the status code the provider expects. |
 | `MailEventsServiceProvider` | Config → verifiers; routes per configured provider. |
 
@@ -329,7 +341,10 @@ tests/
 - **Routes only for configured providers.** No key → no route, so an endpoint without verification never exists. Routes are CSRF-exempt via `method_exists($route, 'withoutCsrf')`: `RouterInterface` only promises `object`, and the module stays independent of `ez-php/framework`.
 - **Dispatch through the container's `EventDispatcher`.** Without `EventServiceProvider` the container autowires a fresh dispatcher with no listeners, and events vanish. The provider's docs say to register it first.
 - **SendGrid keys accepted as shown in the SendGrid UI** (base64 DER) or as PEM. A key that does not load fails when the verifier is resolved, i.e. on the first SendGrid request, not at boot.
-- **ext-openssl is a `suggest`.** Only `SendGridSignature` needs it.
+- **ext-openssl is a `suggest`.** Only `SendGridSignature` and `SnsMessageVerifier` need it.
+- **Postmark is authenticated by Basic credentials, not a signature.** Postmark signs no webhooks; its documented protection is HTTP Basic auth in the webhook URL (plus IP allow-lists, which belong to the infrastructure). The pair is compared in constant time; an empty user or password registers no route.
+- **SES arrives through SNS, so SNS is what is verified.** The message signature (SignatureVersion 1 = SHA1, 2 = SHA256) is checked over SNS's canonical string against the certificate at `SigningCertURL`, which must be `https://sns.<region>.amazonaws.com[.cn]/….pem` — otherwise anyone could host a certificate and sign their own messages. The `TopicArn` must equal `mail_events.ses.topic_arn`, so a valid message from another AWS account's topic is rejected too. Certificates are cached per verifier instance. `SubscriptionConfirmation` is confirmed by visiting `SubscribeURL` (only after the message verified, and only on an AWS host). There is no replay window: SNS retries with the original `Timestamp` for up to an hour; de-duplicate on `eventId` (SNS MessageId + recipient).
+- **SES fans out per recipient.** One SES event can name several recipients (a bounce list, a delivery to many); each becomes its own `MailEvent`, so listeners keep handling exactly one recipient per event.
 
 ---
 
@@ -352,6 +367,6 @@ tests/
 | Suppression-list storage, bounce counting | Application listeners on `MailEvent` |
 | Sending mail | `ez-php/mail` |
 | SMS delivery receipts | Not in a first version (`ez-php/sms` has no inbound side yet) |
-| Other providers (Postmark, SES, …) | Future parsers + verifiers in this module |
+| Other providers (Mailjet, SparkPost, …) | Future parsers + verifiers in this module |
 | Webhook token replay cache | Application (de-duplicate on `eventId`) |
 | Generic incoming-webhook HMAC middleware | `ez-php/webhook` |

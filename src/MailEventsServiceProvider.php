@@ -10,8 +10,12 @@ use EzPhp\Contracts\RouterInterface;
 use EzPhp\Contracts\ServiceProvider;
 use EzPhp\MailEvents\Mailgun\MailgunSignature;
 use EzPhp\MailEvents\Mailgun\MailgunWebhookController;
+use EzPhp\MailEvents\Postmark\PostmarkAuthenticator;
+use EzPhp\MailEvents\Postmark\PostmarkWebhookController;
 use EzPhp\MailEvents\SendGrid\SendGridSignature;
 use EzPhp\MailEvents\SendGrid\SendGridWebhookController;
+use EzPhp\MailEvents\Ses\SesWebhookController;
+use EzPhp\MailEvents\Ses\SnsMessageVerifier;
 
 /**
  * Class MailEventsServiceProvider
@@ -29,6 +33,10 @@ use EzPhp\MailEvents\SendGrid\SendGridWebhookController;
  *   - mail_events.mailgun.path         — route path (default /webhooks/mail/mailgun; '' = no route)
  *   - mail_events.sendgrid.public_key  — SendGrid verification key ('' = no route)
  *   - mail_events.sendgrid.path        — route path (default /webhooks/mail/sendgrid; '' = no route)
+ *   - mail_events.postmark.username / .password — Basic credentials in the Postmark webhook URL ('' = no route)
+ *   - mail_events.postmark.path        — route path (default /webhooks/mail/postmark)
+ *   - mail_events.ses.topic_arn        — SNS topic SES publishes to; only it is accepted ('' = no route)
+ *   - mail_events.ses.path             — route path (default /webhooks/mail/ses)
  *
  * @package EzPhp\MailEvents
  */
@@ -50,6 +58,19 @@ final class MailEventsServiceProvider extends ServiceProvider
 
             return new SendGridSignature($this->string($config, 'mail_events.sendgrid.public_key', ''), $this->tolerance($config));
         });
+
+        $this->app->bind(PostmarkAuthenticator::class, function (ContainerInterface $app): PostmarkAuthenticator {
+            $config = $app->make(ConfigInterface::class);
+
+            return new PostmarkAuthenticator(
+                $this->string($config, 'mail_events.postmark.username', ''),
+                $this->string($config, 'mail_events.postmark.password', ''),
+            );
+        });
+
+        $this->app->bind(SnsMessageVerifier::class, fn (ContainerInterface $app): SnsMessageVerifier => new SnsMessageVerifier(
+            $this->string($app->make(ConfigInterface::class), 'mail_events.ses.topic_arn', ''),
+        ));
     }
 
     /**
@@ -69,6 +90,8 @@ final class MailEventsServiceProvider extends ServiceProvider
         $routes = [
             [$this->string($config, 'mail_events.mailgun.signing_key', ''), $this->string($config, 'mail_events.mailgun.path', '/webhooks/mail/mailgun'), MailgunWebhookController::class],
             [$this->string($config, 'mail_events.sendgrid.public_key', ''), $this->string($config, 'mail_events.sendgrid.path', '/webhooks/mail/sendgrid'), SendGridWebhookController::class],
+            [$this->string($config, 'mail_events.postmark.username', '') === '' ? '' : $this->string($config, 'mail_events.postmark.password', ''), $this->string($config, 'mail_events.postmark.path', '/webhooks/mail/postmark'), PostmarkWebhookController::class],
+            [$this->string($config, 'mail_events.ses.topic_arn', ''), $this->string($config, 'mail_events.ses.path', '/webhooks/mail/ses'), SesWebhookController::class],
         ];
 
         foreach ($routes as [$key, $path, $controller]) {

@@ -32,6 +32,8 @@ final class MailEventsUnconfiguredProviderTest extends ApplicationTestCase
             'tolerance' => 'invalid',
             'mailgun' => ['signing_key' => 'key', 'path' => ''],
             'sendgrid' => ['public_key' => ''],
+            'postmark' => ['username' => '', 'password' => 'set-but-no-user'],
+            'ses' => ['topic_arn' => ''],
         ];
     }
 

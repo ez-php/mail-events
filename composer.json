@@ -1,6 +1,6 @@
 {
   "name": "ez-php/mail-events",
-  "version": "2.6.4",
+  "version": "2.6.5",
   "description": "Normalises Mailgun and SendGrid delivery webhooks (delivered, bounced, complained, opened, clicked) into provider-neutral events dispatched through ez-php/events",
   "type": "library",
   "license": "MIT",

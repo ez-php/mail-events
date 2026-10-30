@@ -37,6 +37,15 @@ return [
         'public_key' => getenv('MAIL_EVENTS_SENDGRID_PUBLIC_KEY') ?: '',
         'path' => '/webhooks/mail/sendgrid',
     ],
+    'postmark' => [
+        'username' => getenv('MAIL_EVENTS_POSTMARK_USERNAME') ?: '',
+        'password' => getenv('MAIL_EVENTS_POSTMARK_PASSWORD') ?: '',
+        'path' => '/webhooks/mail/postmark',
+    ],
+    'ses' => [
+        'topic_arn' => getenv('MAIL_EVENTS_SES_TOPIC_ARN') ?: '',
+        'path' => '/webhooks/mail/ses',
+    ],
 ];
 ```
 
@@ -46,6 +55,11 @@ checks. Point the provider's webhook settings at the URL:
 - **Mailgun:** Sending → Webhooks. Use the domain's *HTTP webhook signing key*.
 - **SendGrid:** Settings → Mail Settings → Event Webhook. Enable *Signed Event Webhook* and
   copy the verification key.
+- **Postmark:** Servers → Webhooks. Postmark does not sign webhooks; put the configured
+  username/password into the URL (`https://hook:secret@example.com/webhooks/mail/postmark`).
+- **Amazon SES:** publish the configuration set's events to an SNS topic and subscribe the URL to it
+  over HTTPS. Set `ses.topic_arn` to the topic's ARN; the subscription confirmation is answered
+  automatically. One SES event becomes one `MailEvent` per recipient.
 
 ---
 
@@ -102,6 +116,10 @@ happen only once, de-duplicate on `$eventId`.
 - A request with a missing or invalid signature gets 401 and is never dispatched.
 - Timestamps outside the tolerance window are rejected, so a captured request cannot be replayed later.
 - The SendGrid signature covers the raw body, so any modification is detected.
+- Postmark requests need the configured Basic credentials (401 otherwise).
+- SES (SNS) messages must come from the configured topic and carry a valid SNS signature from a
+  certificate served by `sns.<region>.amazonaws.com` (403 otherwise). SNS redelivers with the
+  original timestamp, so there is no replay window here — de-duplicate on `MailEvent::$eventId`.
 
 ---
 

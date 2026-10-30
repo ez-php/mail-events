@@ -93,6 +93,30 @@ final class Payload
     }
 
     /**
+     * The ISO 8601 timestamp at `$path` (Postmark, Amazon SES).
+     *
+     * @param array<array-key, mixed> $data
+     * @param string                  ...$path
+     *
+     * @return DateTimeImmutable
+     * @throws MailEventsException When the value is missing or not a date-time.
+     */
+    public static function requireIsoTime(array $data, string ...$path): DateTimeImmutable
+    {
+        $value = self::string($data, ...$path);
+
+        if ($value === null) {
+            throw new MailEventsException(sprintf('Webhook payload lacks "%s".', implode('.', $path)));
+        }
+
+        try {
+            return new DateTimeImmutable($value);
+        } catch (\Exception) {
+            throw new MailEventsException(sprintf('Webhook payload "%s" is not a date-time.', implode('.', $path)));
+        }
+    }
+
+    /**
      * Decode a JSON body into an array.
      *
      * @param string $json
