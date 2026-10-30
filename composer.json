@@ -1,6 +1,6 @@
 {
   "name": "ez-php/mail-events",
-  "version": "2.6.5",
+  "version": "2.7.0",
   "description": "Normalises Mailgun and SendGrid delivery webhooks (delivered, bounced, complained, opened, clicked) into provider-neutral events dispatched through ez-php/events",
   "type": "library",
   "license": "MIT",
@@ -18,16 +18,16 @@
   },
   "require": {
     "php": "^8.5",
-    "ez-php/contracts": "^2.6.0",
-    "ez-php/http": "^2.6.0",
-    "ez-php/events": "^2.6.0"
+    "ez-php/contracts": "^2.7.0",
+    "ez-php/http": "^2.7.0",
+    "ez-php/events": "^2.7.0"
   },
   "suggest": {
     "ext-openssl": "Needed for SendGrid\\SendGridSignature (ECDSA signed event webhook)"
   },
   "require-dev": {
-    "ez-php/docker": "^2.6.3",
-    "ez-php/testing-application": "^2.6.0",
+    "ez-php/docker": "^2.7.0",
+    "ez-php/testing-application": "^2.7.0",
     "phpunit/phpunit": "^13.0",
     "phpstan/phpstan": "^2.1",
     "friendsofphp/php-cs-fixer": "^3.94",
